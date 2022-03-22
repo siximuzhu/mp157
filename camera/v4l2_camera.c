@@ -37,8 +37,8 @@ typedef struct cam_buf_info {
     unsigned long length;       //帧缓冲长度
 } cam_buf_info;
 
-static int width;                       //LCD宽度
-static int height;                      //LCD高度
+static int width = 640;                       //LCD宽度
+static int height = 480;                      //LCD高度
 static int line_length;
 static unsigned short *screen_base = NULL;//LCD显存基地址
 static int fb_fd = -1;                  //LCD设备文件描述符
@@ -131,12 +131,7 @@ static void v4l2_print_formats(void)
     frmsize.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
     frmival.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
     for (i = 0; cam_fmts[i].pixelformat; i++) {
-
-        printf("format<0x%x>, description<%s>\n", cam_fmts[i].pixelformat,
-                    cam_fmts[i].description);
-
-        /* 枚举出摄像头所支持的所有视频采集分辨率 */
-        frmsize.index = 0;
+printf("format<0x%x>, description<%s>\n", cam_fmts[i].pixelformat, cam_fmts[i].description); /* 枚举出摄像头所支持的所有视频采集分辨率 */ frmsize.index = 0;
         frmsize.pixel_format = cam_fmts[i].pixelformat;
         frmival.pixel_format = cam_fmts[i].pixelformat;
         while (0 == ioctl(v4l2_fd, VIDIOC_ENUM_FRAMESIZES, &frmsize)) {
@@ -171,15 +166,16 @@ static int v4l2_set_format(void)
     fmt.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;//type类型
     fmt.fmt.pix.width = width;  //视频帧宽度
     fmt.fmt.pix.height = height;//视频帧高度
-    fmt.fmt.pix.pixelformat = V4L2_PIX_FMT_RGB565;  //像素格式
-    if (0 > ioctl(v4l2_fd, VIDIOC_S_FMT, &fmt)) {
+    fmt.fmt.pix.pixelformat = V4L2_PIX_FMT_JPEG; //V4L2_PIX_FMT_RGB565;  //像素格式
+	if( 0 > ioctl(v4l2_fd,VIDIOC_S_FMT, &fmt)) {
         fprintf(stderr, "ioctl error: VIDIOC_S_FMT: %s\n", strerror(errno));
         return -1;
     }
 
     /*** 判断是否已经设置为我们要求的RGB565像素格式
     如果没有设置成功表示该设备不支持RGB565像素格式 */
-    if (V4L2_PIX_FMT_RGB565 != fmt.fmt.pix.pixelformat) {
+    //if (V4L2_PIX_FMT_RGB565 != fmt.fmt.pix.pixelformat) {
+    if (V4L2_PIX_FMT_JPEG != fmt.fmt.pix.pixelformat) {
         fprintf(stderr, "Error: the device does not support RGB565 format!\n");
         return -1;
     }
@@ -260,6 +256,7 @@ static int v4l2_stream_on(void)
     return 0;
 }
 
+/*
 static void v4l2_read_data(void)
 {
     struct v4l2_buffer buf = {0};
@@ -297,6 +294,29 @@ static void v4l2_read_data(void)
         }
     }
 }
+*/
+
+void store_one_image(void)
+{
+	struct v4l2_buffer buf = {0};
+	char buffer[256];
+
+    buf.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
+    buf.memory = V4L2_MEMORY_MMAP;
+    ioctl(v4l2_fd, VIDIOC_DQBUF, &buf);     //出队
+
+    sprintf(buffer,"/workspace/%d.jpg",buf.index);
+    int file_fd = open(buffer,O_RDWR | O_CREAT); // 若打开失败则不存储该帧图像
+    if(file_fd > 0){
+        printf("saving %d images\n",buf.index);
+        write(file_fd,buf_infos[buf.index].start,buf.bytesused);
+        close(file_fd);
+    }
+ 
+
+	
+}
+
 
 int main(int argc, char *argv[])
 {
@@ -306,8 +326,8 @@ int main(int argc, char *argv[])
     }
 
     /* 初始化LCD */
-    if (fb_dev_init())
-        exit(EXIT_FAILURE);
+//    if (fb_dev_init())
+//        exit(EXIT_FAILURE);
 
     /* 初始化摄像头 */
     if (v4l2_dev_init(argv[1]))
@@ -330,7 +350,8 @@ int main(int argc, char *argv[])
         exit(EXIT_FAILURE);
 
     /* 读取数据：出队 */
-    v4l2_read_data();       //在函数内循环采集数据、将其显示到LCD屏
+    //v4l2_read_data();       //在函数内循环采集数据、将其显示到LCD屏
+	store_one_image();
 
     exit(EXIT_SUCCESS);
 }
