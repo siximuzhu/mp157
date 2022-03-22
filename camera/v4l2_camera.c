@@ -21,9 +21,14 @@
 #include <sys/mman.h>
 #include <linux/videodev2.h>
 #include <linux/fb.h>
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <netdb.h>
 
 #define FB_DEV              "/dev/fb0"      //LCD设备节点
 #define FRAMEBUFFER_COUNT   3               //帧缓冲数量
+#define HOST_IP				""
+#define TCP_PORT			12345
 
 /*** 摄像头像素格式及其描述信息 ***/
 typedef struct camera_format {
@@ -296,6 +301,34 @@ static void v4l2_read_data(void)
 }
 */
 
+int socket_connect_server(char *ip,int port)
+{
+	int sockfd;
+	struct hostent *he;
+	struct sockaddr_in server;
+
+	if((he = gethostbyname(ip)) = NULL){
+		printf("gethostbyname() error\n");
+		return -1;
+	}
+
+	if((sockfd = socket(AF_INET,SOCK_STREAM,0)) == -1){
+		printf("socket() error\n");
+		return -2;
+	}
+	bzero(&server,sizeof(server));
+	server.sin_family = AF_INET;
+	server.sin_port = htons(port);
+	server.sin_addr = *((struct in_addr *)he->h_addr);
+	if(connect(sockfd,(struct sockaddr*)&server,sizeof(server)) == -1){
+		printf("connect() error\n");
+		return -3;
+	}
+
+	return sockfd;
+	
+}
+
 void store_one_image(void)
 {
 	struct v4l2_buffer buf = {0};
@@ -303,17 +336,22 @@ void store_one_image(void)
 
     buf.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
     buf.memory = V4L2_MEMORY_MMAP;
-    ioctl(v4l2_fd, VIDIOC_DQBUF, &buf);     //出队
+	while(1)
+	{
+		for(buf.index = 0; buf.index < FRAMEBUFFER_COUNT; buf.index++)
+		{
+			ioctl(v4l2_fd, VIDIOC_DQBUF, &buf);     //出队
 
-    sprintf(buffer,"/workspace/%d.jpg",buf.index);
-    int file_fd = open(buffer,O_RDWR | O_CREAT); // 若打开失败则不存储该帧图像
-    if(file_fd > 0){
-        printf("saving %d images\n",buf.index);
-        write(file_fd,buf_infos[buf.index].start,buf.bytesused);
-        close(file_fd);
-    }
- 
-
+			sprintf(buffer,"/workspace/%d.jpg",buf.index);
+			int file_fd = open(buffer,O_RDWR | O_CREAT); // 若打开失败则不存储该帧图像
+			if(file_fd > 0){
+				printf("saving %d images\n",buf.index);
+				write(file_fd,buf_infos[buf.index].start,buf.length);//buf.bytesused
+				close(file_fd);
+			}
+			ioctl(v4l2_fd, VIDIOC_QBUF, &buf);
+		}
+	}
 	
 }
 
