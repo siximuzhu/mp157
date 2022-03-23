@@ -27,7 +27,7 @@
 
 #define FB_DEV              "/dev/fb0"      //LCD设备节点
 #define FRAMEBUFFER_COUNT   3               //帧缓冲数量
-#define HOST_IP				""
+#define HOST_IP				"192.168.3.2"
 #define TCP_PORT			12345
 
 /*** 摄像头像素格式及其描述信息 ***/
@@ -236,6 +236,7 @@ static int v4l2_init_buffer(void)
         }
     }
 
+#if 0
     /* 入队 */
     for (buf.index = 0; buf.index < FRAMEBUFFER_COUNT; buf.index++) {
 
@@ -244,7 +245,7 @@ static int v4l2_init_buffer(void)
             return -1;
         }
     }
-
+#endif
     return 0;
 }
 
@@ -306,8 +307,9 @@ int socket_connect_server(char *ip,int port)
 	int sockfd;
 	struct hostent *he;
 	struct sockaddr_in server;
+	char recv_data[10];
 
-	if((he = gethostbyname(ip)) = NULL){
+	if((he = gethostbyname(ip)) == NULL){
 		printf("gethostbyname() error\n");
 		return -1;
 	}
@@ -324,32 +326,87 @@ int socket_connect_server(char *ip,int port)
 		printf("connect() error\n");
 		return -3;
 	}
+	send(sockfd,"mp157",5,0);
+	recv(sockfd,recv_data,7,0);
 
 	return sockfd;
 	
 }
 
-void store_one_image(void)
+int push_images(void)
 {
 	struct v4l2_buffer buf = {0};
 	char buffer[256];
+	char recv_data[10];
+	unsigned int frame_len = 0;
+
+	int sockfd = socket_connect_server(HOST_IP,TCP_PORT);
+	if(sockfd < 0)
+	{
+		return -1;
+	}	
+
 
     buf.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
     buf.memory = V4L2_MEMORY_MMAP;
 	while(1)
 	{
+		/* 入队 */
+		for (buf.index = 0; buf.index < FRAMEBUFFER_COUNT; buf.index++) {
+
+			if (0 > ioctl(v4l2_fd, VIDIOC_QBUF, &buf)) {
+				fprintf(stderr, "ioctl error: VIDIOC_QBUF: %s\n", strerror(errno));
+				return -1;
+			}
+		}
+
 		for(buf.index = 0; buf.index < FRAMEBUFFER_COUNT; buf.index++)
 		{
-			ioctl(v4l2_fd, VIDIOC_DQBUF, &buf);     //出队
-
+			
+			usleep(300* 1000);
+			if(ioctl(v4l2_fd, VIDIOC_DQBUF, &buf) < 0)     //出队
+			{
+				printf("DQBUF fail\n");
+				return -2;
+			}
+#if 0
 			sprintf(buffer,"/workspace/%d.jpg",buf.index);
 			int file_fd = open(buffer,O_RDWR | O_CREAT); // 若打开失败则不存储该帧图像
 			if(file_fd > 0){
 				printf("saving %d images\n",buf.index);
-				write(file_fd,buf_infos[buf.index].start,buf.length);//buf.bytesused
+				write(file_fd,buf_infos[buf.index].start,buf.length);
 				close(file_fd);
 			}
-			ioctl(v4l2_fd, VIDIOC_QBUF, &buf);
+#endif
+
+			frame_len = buf.bytesused;
+			printf("-------flags = %d\n",buf.flags);
+
+			char str_len[10];
+			memset(str_len,0x0,10);
+			memcpy(str_len,&(frame_len),sizeof(frame_len));
+			printf("send len = %d\n",frame_len);
+			send(sockfd,str_len,10,0);
+			memset(recv_data,0x0,10);
+			recv(sockfd,recv_data,7,0);
+			printf("recv1:%s\n",recv_data);
+			usleep(100 * 1000);
+
+			printf("send data\n");
+			send(sockfd,buf_infos[buf.index].start,frame_len,0);
+			printf("0x%04x 0x%04x   \n",buf_infos[buf.index].start[0],buf_infos[buf.index].start[frame_len / 2 - 1]);
+			memset(recv_data,0x0,10);
+			recv(sockfd,recv_data,7,0);
+			printf("recv2:%s\n",recv_data);
+			usleep(200 * 1000);
+#if 0
+			if(ioctl(v4l2_fd, VIDIOC_QBUF, &buf) < 0)
+			{
+				printf("QBUF fail\n");
+				return -3;
+			}
+#endif
+	
 		}
 	}
 	
@@ -389,7 +446,7 @@ int main(int argc, char *argv[])
 
     /* 读取数据：出队 */
     //v4l2_read_data();       //在函数内循环采集数据、将其显示到LCD屏
-	store_one_image();
+	push_images();
 
     exit(EXIT_SUCCESS);
 }
