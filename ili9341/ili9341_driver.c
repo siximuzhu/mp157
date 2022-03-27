@@ -7,6 +7,16 @@ Copyright © ALIENTEK Co., Ltd. 1998-2029. All rights reserved.
 其他	   	: 无
 论坛 	   	: www.openedv.com
 日志	   	: 初版V1.0 2021/03/22 正点原子Linux团队创建
+
+SPI CS 		 	GPIOZ5
+SPI CLK			GPIOZ0
+SPI MOSI		GPIOZ2
+SPI MISO		GPIOZ1
+RESET			GPIOF6
+DC 				GPIOF7
+
+
+
 ***************************************************************/
 #include <linux/spi/spi.h>
 #include <linux/kernel.h>
@@ -25,6 +35,62 @@ Copyright © ALIENTEK Co., Ltd. 1998-2029. All rights reserved.
 #define ILI9341_CNT	1
 #define ILI9341_NAME	"ili9341"
 
+#define USE_HORIZONTAL 0  //设置横屏或者竖屏显示 0或1为竖屏 2或3为横屏
+
+#if USE_HORIZONTAL==0||USE_HORIZONTAL==1
+#define LCD_W 240
+#define LCD_H 320
+
+#else
+#define LCD_W 320
+#define LCD_H 240
+#endif
+
+//画笔颜色
+#define WHITE         	 0xFFFF
+#define BLACK         	 0x0000	  
+#define BLUE           	 0x001F  
+#define BRED             0XF81F
+#define GRED 			       0XFFE0
+#define GBLUE			       0X07FF
+#define RED           	 0xF800
+#define MAGENTA       	 0xF81F
+#define GREEN         	 0x07E0
+#define CYAN          	 0x7FFF
+#define YELLOW        	 0xFFE0
+#define BROWN 			     0XBC40 //棕色
+#define BRRED 			     0XFC07 //棕红色
+#define GRAY  			     0X8430 //灰色
+#define DARKBLUE      	 0X01CF	//深蓝色
+#define LIGHTBLUE      	 0X7D7C	//浅蓝色  
+#define GRAYBLUE       	 0X5458 //灰蓝色
+#define LIGHTGREEN     	 0X841F //浅绿色
+#define LGRAY 			     0XC618 //浅灰色(PANNEL),窗体背景色
+#define LGRAYBLUE        0XA651 //浅灰蓝色(中间层颜色)
+#define LBBLUE           0X2B12 //浅棕蓝色(选择条目的反色)
+
+/* 寄存器物理地址 */
+#define PERIPH_BASE     		     	(0x40000000)
+#define MPU_AHB4_PERIPH_BASE			(PERIPH_BASE + 0x10000000)
+#define RCC_BASE        		    	(MPU_AHB4_PERIPH_BASE + 0x0000)	
+#define RCC_MP_AHB4ENSETR				(RCC_BASE + 0XA28)
+#define GPIOF_BASE						(MPU_AHB4_PERIPH_BASE + 0x7000)	
+#define GPIOF_MODER      			    (GPIOF_BASE + 0x0000)	
+#define GPIOF_OTYPER      			    (GPIOF_BASE + 0x0004)	
+#define GPIOF_OSPEEDR      			    (GPIOF_BASE + 0x0008)	
+#define GPIOF_PUPDR      			    (GPIOF_BASE + 0x000C)	
+#define GPIOF_ODR      			    (GPIOF_BASE + 0x0014)
+#define GPIOF_BSRR      			    (GPIOF_BASE + 0x0018)
+
+/* 映射后的寄存器虚拟地址指针 */
+static void __iomem *MPU_AHB4_PERIPH_RCC_PI;
+static void __iomem *GPIOF_MODER_PI;
+static void __iomem *GPIOF_OTYPER_PI;
+static void __iomem *GPIOF_OSPEEDR_PI;
+static void __iomem *GPIOF_PUPDR_PI;
+static void __iomem *GPIOF_ODR_PI;
+static void __iomem *GPIOF_BSRR_PI;
+
 
 struct ili9341_dev {
 	struct spi_device *spi;		/* spi设备 */
@@ -39,12 +105,18 @@ struct ili9341_dev *ili9341dev;
 
 static void ili9341_res_clr(void)
 {
-
+	u32 val;
+	val = readl(GPIOF_ODR_PI);
+	val &= ~(0x1 << 6);
+	writel(val,GPIOF_ODR_PI);
 }
 
 static void ili9341_res_set(void)
 {
-
+	u32 val;
+	val = readl(GPIOF_ODR_PI);
+	val |= (0x1 << 6);
+	writel(val,GPIOF_ODR_PI);
 }
 
 static void ili9341_blk_clr(void)
@@ -59,33 +131,58 @@ static void ili9341_blk_set(void)
 
 static void ili9341_dc_clr(void)
 {
-
+	u32 val;
+	val = readl(GPIOF_ODR_PI);
+	val &= ~(0x1 << 7);
+	writel(val,GPIOF_ODR_PI);
 }
 
 static void ili9341_dc_set(void)
 {
-
+	u32 val;
+	val = readl(GPIOF_ODR_PI);
+	val |= (0x1 << 7);
+	writel(val,GPIOF_ODR_PI);
 }
 
-static int ili9341_write_spi(unsigned char data)
+static int ili9341_write_spi(unsigned char *data,unsigned int len)
 {
 	int ret = -1;
-	unsigned char txdata = data;
+	unsigned char *txdata;
 	struct spi_message m;
 	struct spi_transfer *t;
 	struct spi_device *spi = (struct spi_device *)ili9341dev->spi;
 	
 	t = kzalloc(sizeof(struct spi_transfer), GFP_KERNEL);	/* 申请内存 */
 	if(!t) {
+		printk("mem error1\n");
 		return -ENOMEM;
 	}
+
+	txdata = kzalloc(len,GFP_KERNEL);
+	if(!txdata)
+	{
+		printk("mem error2\n");
+		goto out1;
+	}
 	
-	t->tx_buf = &txdata;			/* 要发送的数据 */
-	t->len = 1;				/* t->len=发送的长度+读取的长度 */
+	memcpy(txdata,data,len);
+	t->tx_buf = txdata;			/* 要发送的数据 */
+	t->len = len;				/* t->len=发送的长度+读取的长度 */
 	spi_message_init(&m);		/* 初始化spi_message */
 	spi_message_add_tail(t, &m);/* 将spi_transfer添加到spi_message队列 */
 	ret = spi_sync(spi, &m);	/* 同步发送 */
-	
+	if(ret)
+	{
+		printk("spi err\n");
+		goto out2;
+	}
+	//printk("%02x %d\n",txdata[0],len);
+
+out2:
+	kfree(txdata);
+
+out1:	
 	kfree(t);					/* 释放内存 */
 	return ret;
 }
@@ -93,144 +190,70 @@ static int ili9341_write_spi(unsigned char data)
 static void ili9341_write_reg(unsigned char data)
 {
 	ili9341_dc_clr();  
-	ili9341_write_spi(data);
+	ili9341_write_spi(&data,1);
 	ili9341_dc_set();
 }
 
 static void ili9341_write_data8(unsigned char data)
 {
-	ili9341_write_spi(data);
+	ili9341_write_spi(&data,1);
 }
 
 static void ili9341_write_data16(unsigned short data)
 {
-	ili9341_write_spi(data >> 8);
-	ili9341_write_spi(data);
+	u8 v1 = data >> 8;
+	u8 v2 = data;
+	ili9341_write_spi(&v1,1);
+	ili9341_write_spi(&v2,1);
 }
 
-
-
-
-/*
- * @description	: 从ili9341读取多个寄存器数据
- * @param - dev:  ili9341设备
- * @param - reg:  要读取的寄存器首地址
- * @param - val:  读取到的数据
- * @param - len:  要读取的数据长度
- * @return 		: 操作结果
- */
-static int ili9341_read_regs(struct ili9341_dev *dev, u8 reg, void *buf, int len)
+void ili9341_address_set(u16 x1,u16 y1,u16 x2,u16 y2)
 {
-
-	int ret = -1;
-	unsigned char txdata[1];
-	unsigned char * rxdata;
-	struct spi_message m;
-	struct spi_transfer *t;
-	struct spi_device *spi = (struct spi_device *)dev->spi;
-    
-	t = kzalloc(sizeof(struct spi_transfer), GFP_KERNEL);	/* 申请内存 */
-	if(!t) {
-		return -ENOMEM;
-	}
-	rxdata = kzalloc(sizeof(char) * len, GFP_KERNEL);	/* 申请内存 */
-	if(!rxdata) {
-		goto out1;
-	}
-	/* 一共发送len+1个字节的数据，第一个字节为
-	寄存器首地址，一共要读取len个字节长度的数据，*/
-	txdata[0] = reg | 0x80;		/* 写数据的时候首寄存器地址bit8要置1 */			
-	t->tx_buf = txdata;			/* 要发送的数据 */
-    t->rx_buf = rxdata;			/* 要读取的数据 */
-	t->len = len+1;				/* t->len=发送的长度+读取的长度 */
-	spi_message_init(&m);		/* 初始化spi_message */
-	spi_message_add_tail(t, &m);/* 将spi_transfer添加到spi_message队列 */
-	ret = spi_sync(spi, &m);	/* 同步发送 */
-	if(ret) {
-		goto out2;
-	}
-	
-    memcpy(buf , rxdata+1, len);  /* 只需要读取的数据 */
-
-out2:
-	kfree(rxdata);					/* 释放内存 */
-out1:	
-	kfree(t);						/* 释放内存 */
-	
-	return ret;
+		ili9341_write_reg(0x2a);//列地址设置
+		ili9341_write_data16(x1);
+		ili9341_write_data16(x2);
+		ili9341_write_reg(0x2b);//行地址设置
+		ili9341_write_data16(y1);
+		ili9341_write_data16(y2);
+		ili9341_write_reg(0x2c);//储存器写
 }
 
-/*
- * @description	: 向ili9341多个寄存器写入数据
- * @param - dev:  ili9341设备
- * @param - reg:  要写入的寄存器首地址
- * @param - val:  要写入的数据缓冲区
- * @param - len:  要写入的数据长度
- * @return 	  :   操作结果
- */
-static s32 ili9341_write_regs(struct ili9341_dev *dev, u8 reg, u8 *buf, u8 len)
-{
-	int ret = -1;
-	unsigned char *txdata;
-	struct spi_message m;
-	struct spi_transfer *t;
-	struct spi_device *spi = (struct spi_device *)dev->spi;
-	
-	t = kzalloc(sizeof(struct spi_transfer), GFP_KERNEL);	/* 申请内存 */
-	if(!t) {
-		return -ENOMEM;
+void ili9341_fill(u16 xsta,u16 ysta,u16 xend,u16 yend,u16 color)
+{          
+	u16 i,j; 
+	int k;
+	int frame_size = 320 * 240 *2;
+	char *val;
+
+	val = kzalloc(frame_size,GFP_KERNEL);
+	if(!val)
+	{
+		printk("mem error\n");
+		return;
 	}
+
+	ili9341_address_set(xsta,ysta,xend-1,yend-1);//设置显示范围
+/*	for(i=ysta;i<yend;i++)
+	{													   	 	
+		for(j=xsta;j<xend;j++)
+		{
+			ili9341_write_data16(0x001F);
+		}
+	} 	*/
+	memset(val,0x0,320 * 240 *2);
+	for(k = 0;k < 320 * 240 *2;k++)
+	{	if((k % 2))
+			val[k] = 0x1f;
+	}	
 	
-	txdata = kzalloc(sizeof(char)+len, GFP_KERNEL);
-	if(!txdata) {
-		goto out1;
+
+	for(k = 0;k < 240;k++)
+	{
+		ili9341_write_spi(val + 320 * 2 * k,320 * 2);
 	}
-	
-	/* 一共发送len+1个字节的数据，第一个字节为
-	寄存器首地址，len为要写入的寄存器的集合，*/
-	*txdata = reg & ~0x80;	/* 写数据的时候首寄存器地址bit8要清零 */
-    memcpy(txdata+1, buf, len);	/* 把len个寄存器拷贝到txdata里，等待发送 */
-	t->tx_buf = txdata;			/* 要发送的数据 */
-	t->len = len+1;				/* t->len=发送的长度+读取的长度 */
-	spi_message_init(&m);		/* 初始化spi_message */
-	spi_message_add_tail(t, &m);/* 将spi_transfer添加到spi_message队列 */
-	ret = spi_sync(spi, &m);	/* 同步发送 */
-    if(ret) {
-        goto out2;
-    }
-	
-out2:
-	kfree(txdata);				/* 释放内存 */
-out1:
-	kfree(t);					/* 释放内存 */
-	return ret;
-}
 
-/*
- * @description	: 读取ili9341指定寄存器值，读取一个寄存器
- * @param - dev:  ili9341设备
- * @param - reg:  要读取的寄存器
- * @return 	  :   读取到的寄存器值
- */
-static unsigned char ili9341_read_onereg(struct ili9341_dev *dev, u8 reg)
-{
-	u8 data = 0;
-	ili9341_read_regs(dev, reg, &data, 1);
-	return data;
-}
-
-/*
- * @description	: 向ili9341指定寄存器写入指定的值，写一个寄存器
- * @param - dev:  ili9341设备
- * @param - reg:  要写的寄存器
- * @param - data: 要写入的值
- * @return   :    无
- */	
-
-static void ili9341_write_onereg(struct ili9341_dev *dev, u8 reg, u8 value)
-{
-	u8 buf = value;
-	ili9341_write_regs(dev, reg, &buf, 1);
+	kfree(val);
+			  	    
 }
 
 
@@ -282,6 +305,80 @@ static const struct file_operations ili9341_ops = {
 	.release = ili9341_release,
 };
 
+static void ili9341_gpio_init(void)
+{
+	u32 i;
+	u32 val;
+	/* 1、寄存器地址映射 */
+    MPU_AHB4_PERIPH_RCC_PI = ioremap(RCC_MP_AHB4ENSETR, 4);
+    GPIOF_MODER_PI = ioremap(GPIOF_MODER, 4);
+    GPIOF_OTYPER_PI = ioremap(GPIOF_OTYPER, 4);
+    GPIOF_OSPEEDR_PI = ioremap(GPIOF_OTYPER, 4);
+    GPIOF_PUPDR_PI = ioremap(GPIOF_PUPDR, 4);
+	GPIOF_ODR_PI = ioremap(GPIOF_ODR, 4);
+    GPIOF_BSRR_PI = ioremap(GPIOF_BSRR, 4);
+
+    /* 2、使能GPIOF时钟 */
+    val = readl(MPU_AHB4_PERIPH_RCC_PI);
+    val &= ~(0X1 << 5); /* 清除以前的设置 */
+    val |= (0X1 << 5);  /* 设置新值 */
+    writel(val, MPU_AHB4_PERIPH_RCC_PI);
+
+
+    /* 3、设置GPIOF6通用的输出模式。*/
+    val = readl(GPIOF_MODER_PI);
+    val &= ~(0X3 << 12); /* bit0:1清零 */
+    val |= (0X1 << 12);  /* bit0:1设置01 */
+    writel(val, GPIOF_MODER_PI);
+
+    /* 3、设置GPIOF6 7为推挽模式。*/
+    val = readl(GPIOF_OTYPER_PI);
+    val &= ~(0X3 << 6); /* bit0清零，设置为上拉*/
+    writel(val, GPIOF_OTYPER_PI);
+
+    /* 4、设置PI0为高速。*/
+    val = readl(GPIOF_OSPEEDR_PI);
+    val &= ~(0X3 << 12); /* bit0:1 清零 */
+    val |= (0x2 << 12); /* bit0:1 设置为10*/
+    writel(val, GPIOF_OSPEEDR_PI);
+
+    /* 5、设置PI0为上拉。*/
+    val = readl(GPIOF_PUPDR_PI);
+    val &= ~(0X3 << 12); /* bit0:1 清零*/
+    val |= (0x1 << 12); /*bit0:1 设置为01*/
+    writel(val,GPIOF_PUPDR_PI);
+
+
+
+	    /* 3、设置GPIOF6通用的输出模式。*/
+    val = readl(GPIOF_MODER_PI);
+    val &= ~(0X3 << 14); /* bit0:1清零 */
+    val |= (0X1 << 14);  /* bit0:1设置01 */
+    writel(val, GPIOF_MODER_PI);
+
+    /* 4、设置PI0为高速。*/
+    val = readl(GPIOF_OSPEEDR_PI);
+    val &= ~(0X3 << 14); /* bit0:1 清零 */
+    val |= (0x2 << 14); /* bit0:1 设置为10*/
+    writel(val, GPIOF_OSPEEDR_PI);
+
+    /* 5、设置PI0为上拉。*/
+    val = readl(GPIOF_PUPDR_PI);
+    val &= ~(0X3 << 14); /* bit0:1 清零*/
+    val |= (0x1 << 14); /*bit0:1 设置为01*/
+    writel(val,GPIOF_PUPDR_PI);
+
+	val = readl(GPIOF_ODR_PI);
+	val |= (0x3 << 6);
+	writel(val,GPIOF_ODR_PI);
+
+/*
+	val = readl(GPIOF_ODR_PI);
+	val &= ~(0x3 << 6);
+	writel(val,GPIOF_ODR_PI); */
+
+}
+
 /*
  * ILI9341内部寄存器初始化函数 
  * @param - spi : 要操作的设备
@@ -289,7 +386,8 @@ static const struct file_operations ili9341_ops = {
  */
 void ili9341_lcd_init(struct ili9341_dev *dev)
 {
-	/*
+	ili9341_gpio_init();
+
 	ili9341_res_clr();
 	mdelay(100);
 	ili9341_res_set();
@@ -297,15 +395,114 @@ void ili9341_lcd_init(struct ili9341_dev *dev)
 	ili9341_blk_set();
 	mdelay(100);
 
-	ili9341_write_reg(0x11)   //sleep out
+	ili9341_write_reg(0x11);   //sleep out
 	mdelay(120);
-	*/
-	printk("start send spi 0x12\n");
-	ili9341_write_spi(0x12);
-	ili9341_write_spi(0x34);
-	ili9341_write_spi(0x56);
-	ili9341_write_spi(0x78);
-	printk("spi send over\n");
+
+	ili9341_write_reg(0xcf);
+	ili9341_write_data8(0x00);
+	ili9341_write_data8(0xc1);
+	ili9341_write_data8(0x30);
+
+	ili9341_write_reg(0xED);
+	ili9341_write_data8(0x64);
+	ili9341_write_data8(0x03);
+	ili9341_write_data8(0X12);
+	ili9341_write_data8(0X81);
+
+	ili9341_write_reg(0xE8);
+	ili9341_write_data8(0x85);
+	ili9341_write_data8(0x00);
+	ili9341_write_data8(0x79);
+
+	ili9341_write_reg(0xCB);
+	ili9341_write_data8(0x39);
+	ili9341_write_data8(0x2C);
+	ili9341_write_data8(0x00);
+	ili9341_write_data8(0x34);
+	ili9341_write_data8(0x02);
+
+	ili9341_write_reg(0xF7);
+	ili9341_write_data8(0x20);
+
+	ili9341_write_reg(0xEA);
+	ili9341_write_data8(0x00);
+	ili9341_write_data8(0x00);
+
+	ili9341_write_reg(0xC0); //Power control
+	ili9341_write_data8(0x1D); //VRH[5:0]
+
+	ili9341_write_reg(0xC1); //Power control
+	ili9341_write_data8(0x12); //SAP[2:0];BT[3:0]
+
+	ili9341_write_reg(0xC5); //VCM control
+	ili9341_write_data8(0x33);
+	ili9341_write_data8(0x3F);
+
+	ili9341_write_reg(0xC7); //VCM control
+	ili9341_write_data8(0x92);
+
+	ili9341_write_reg(0x3A); // Memory Access Control
+	ili9341_write_data8(0x55);
+
+	ili9341_write_reg(0x36); // Memory Access Control
+	if(USE_HORIZONTAL==0)ili9341_write_data8(0x08);
+	else if(USE_HORIZONTAL==1)ili9341_write_data8(0xC8);
+	else if(USE_HORIZONTAL==2)ili9341_write_data8(0x78);
+	else ili9341_write_data8(0xA8);
+
+	ili9341_write_reg(0xB1);
+	ili9341_write_data8(0x00);
+	ili9341_write_data8(0x12);
+	
+	ili9341_write_reg(0xB6); // Display Function Control
+	ili9341_write_data8(0x0A);
+	ili9341_write_data8(0xA2);
+
+	ili9341_write_reg(0x44);
+	ili9341_write_data8(0x02);
+
+	ili9341_write_reg(0xF2); // 3Gamma Function Disable
+	ili9341_write_data8(0x00);
+	ili9341_write_reg(0x26); //Gamma curve selected
+	ili9341_write_data8(0x01);
+	ili9341_write_reg(0xE0); //Set Gamma
+	ili9341_write_data8(0x0F);
+	ili9341_write_data8(0x22);
+	ili9341_write_data8(0x1C);
+	ili9341_write_data8(0x1B);
+	ili9341_write_data8(0x08);
+	ili9341_write_data8(0x0F);
+	ili9341_write_data8(0x48);
+	ili9341_write_data8(0xB8);
+	ili9341_write_data8(0x34);
+	ili9341_write_data8(0x05);
+	ili9341_write_data8(0x0C);
+	ili9341_write_data8(0x09);
+	ili9341_write_data8(0x0F);
+	ili9341_write_data8(0x07);
+	ili9341_write_data8(0x00);
+	ili9341_write_reg(0XE1); //Set Gamma
+	ili9341_write_data8(0x00);
+	ili9341_write_data8(0x23);
+	ili9341_write_data8(0x24);
+	ili9341_write_data8(0x07);
+	ili9341_write_data8(0x10);
+	ili9341_write_data8(0x07);
+	ili9341_write_data8(0x38);
+	ili9341_write_data8(0x47);
+	ili9341_write_data8(0x4B);
+	ili9341_write_data8(0x0A);
+	ili9341_write_data8(0x13);
+	ili9341_write_data8(0x06);
+	ili9341_write_data8(0x30);
+	ili9341_write_data8(0x38);
+	ili9341_write_data8(0x0F);
+	ili9341_write_reg(0x29); //Display on
+
+
+	
+	ili9341_fill(0,0,LCD_W,LCD_H,WHITE);
+	
 
 }
 
