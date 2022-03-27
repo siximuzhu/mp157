@@ -247,7 +247,7 @@ static int ili9341_open(struct inode *inode, struct file *filp)
 	return 0;
 }
 
-static ssize_t ili9341_write(struct file *filp, char __user *buf, size_t cnt, loff_t *off)
+static ssize_t ili9341_write(struct file *filp,const char __user *buf, size_t cnt, loff_t *off)
 {
 
 
