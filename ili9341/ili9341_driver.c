@@ -35,7 +35,7 @@ DC 				GPIOF7
 #define ILI9341_CNT	1
 #define ILI9341_NAME	"ili9341"
 
-#define USE_HORIZONTAL 0  //设置横屏或者竖屏显示 0或1为竖屏 2或3为横屏
+#define USE_HORIZONTAL 2  //设置横屏或者竖屏显示 0或1为竖屏 2或3为横屏
 
 #if USE_HORIZONTAL==0||USE_HORIZONTAL==1
 #define LCD_W 240
@@ -169,6 +169,8 @@ static int ili9341_write_spi(unsigned char *data,unsigned int len)
 	memcpy(txdata,data,len);
 	t->tx_buf = txdata;			/* 要发送的数据 */
 	t->len = len;				/* t->len=发送的长度+读取的长度 */
+//	t->speed_hz = 30000000;
+//	t->effective_speed_hz = 30000000;
 	spi_message_init(&m);		/* 初始化spi_message */
 	spi_message_add_tail(t, &m);/* 将spi_transfer添加到spi_message队列 */
 	ret = spi_sync(spi, &m);	/* 同步发送 */
@@ -256,6 +258,18 @@ void ili9341_fill(u16 xsta,u16 ysta,u16 xend,u16 yend,u16 color)
 			  	    
 }
 
+void ili9341_draw_picture(u16 xsta,u16 ysta,u16 xend,u16 yend,u8 *rgb_565)
+{
+	u32 i;
+
+	ili9341_address_set(xsta,ysta,xend-1,yend-1);//设置显示范围
+	for(i = 0;i < 240;i++)
+	{
+		ili9341_write_spi(rgb_565 + 320 * 2 * i,320 * 2);
+	}
+
+}
+
 
 
 /*
@@ -272,7 +286,16 @@ static int ili9341_open(struct inode *inode, struct file *filp)
 
 static ssize_t ili9341_write(struct file *filp,const char __user *buf, size_t cnt, loff_t *off)
 {
+	u8* rgb_565;
 
+	rgb_565 = kzalloc(320 * 240 * 2,GFP_KERNEL);
+	if(!rgb_565)
+	{
+		printk("write mem error!\n");
+		return -ENOMEM;
+	}
+	copy_from_user(rgb_565,buf,cnt);
+	ili9341_draw_picture(0,0,LCD_W,LCD_H,rgb_565);
 
 	return 0;
 }
@@ -501,7 +524,7 @@ void ili9341_lcd_init(struct ili9341_dev *dev)
 
 
 	
-	ili9341_fill(0,0,LCD_W,LCD_H,WHITE);
+	ili9341_fill(0,0,LCD_W,LCD_H,BRED);
 	
 
 }
@@ -517,7 +540,7 @@ static int ili9341_probe(struct spi_device *spi)
 	int ret;
 //	struct ili9341_dev *ili9341dev;
 
-	printk("ili9341_probe\n");
+	printk("ili9341_probe1:max = speed = %d\n",spi->max_speed_hz);
 	
 	/* 分配ili9341dev对象的空间 */
 	ili9341dev = devm_kzalloc(&spi->dev, sizeof(*ili9341dev), GFP_KERNEL);
@@ -563,6 +586,8 @@ static int ili9341_probe(struct spi_device *spi)
 	ili9341_lcd_init(ili9341dev);	
 	/* 保存ili9341dev结构体 */
 	spi_set_drvdata(spi, ili9341dev);
+
+	printk("ili9341_probe2:max = speed = %d\n",spi->max_speed_hz);
 
 	return 0;
 destroy_class:

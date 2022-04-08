@@ -42,8 +42,8 @@ typedef struct cam_buf_info {
     unsigned long length;       //帧缓冲长度
 } cam_buf_info;
 
-static int width = 640;                       //LCD宽度
-static int height = 480;                      //LCD高度
+static int width = 320;                       //LCD宽度
+static int height = 240;                      //LCD高度
 static int line_length;
 static unsigned short *screen_base = NULL;//LCD显存基地址
 static int fb_fd = -1;                  //LCD设备文件描述符
@@ -171,7 +171,7 @@ static int v4l2_set_format(void)
     fmt.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;//type类型
     fmt.fmt.pix.width = width;  //视频帧宽度
     fmt.fmt.pix.height = height;//视频帧高度
-    fmt.fmt.pix.pixelformat = V4L2_PIX_FMT_JPEG; //V4L2_PIX_FMT_RGB565;  //像素格式
+    fmt.fmt.pix.pixelformat = V4L2_PIX_FMT_RGB565; //V4L2_PIX_FMT_RGB565; V4L2_PIX_FMT_JPEG  //像素格式
 	if( 0 > ioctl(v4l2_fd,VIDIOC_S_FMT, &fmt)) {
         fprintf(stderr, "ioctl error: VIDIOC_S_FMT: %s\n", strerror(errno));
         return -1;
@@ -179,8 +179,8 @@ static int v4l2_set_format(void)
 
     /*** 判断是否已经设置为我们要求的RGB565像素格式
     如果没有设置成功表示该设备不支持RGB565像素格式 */
-    //if (V4L2_PIX_FMT_RGB565 != fmt.fmt.pix.pixelformat) {
-    if (V4L2_PIX_FMT_JPEG != fmt.fmt.pix.pixelformat) {
+    if (V4L2_PIX_FMT_RGB565 != fmt.fmt.pix.pixelformat) {
+    //if (V4L2_PIX_FMT_JPEG != fmt.fmt.pix.pixelformat) {
         fprintf(stderr, "Error: the device does not support RGB565 format!\n");
         return -1;
     }
@@ -340,8 +340,9 @@ int push_images(void)
 	struct v4l2_buffer buf = {0};
 	char buffer[256];
 	char recv_data[10];
+    char temp;
 
-#if 1
+#if 0
 	int sockfd = socket_connect_server(HOST_IP,TCP_PORT);
 	if(sockfd < 0)
 	{
@@ -349,10 +350,20 @@ int push_images(void)
 	}	
 #endif
 
+    int fbfd = open("/dev/ili9341",O_RDWR);
+    if(fbfd < 0)
+    {
+        perror("open /dev/ili9314 error:");
+        return -1;
+    }else{
+        printf("open /dev/ili9341 success\n");
+    }
+
+
 
     buf.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
     buf.memory = V4L2_MEMORY_MMAP;
-	for(int j = 0;j < 3;j++)
+	for(int j = 0;;j++)
 	{
 		
 		for(buf.index = 0; buf.index < FRAMEBUFFER_COUNT; buf.index++)
@@ -365,18 +376,39 @@ int push_images(void)
 			}
 			frame_len = buf.bytesused;
 			memcpy(frame_buf,buf_infos[buf.index].start,frame_len);
-#if 1
-			sprintf(buffer,"/workspace/%d.jpg",j * 1 + buf.index);
+#if 0
+			sprintf(buffer,"/workspace/%d.jpg",j * FRAMEBUFFER_COUNT + buf.index);
 			int file_fd = open(buffer,O_RDWR | O_CREAT); // 若打开失败则不存储该帧图像
 			if(file_fd > 0){
-				printf("saving %d images\n",j * 1 + buf.index);
+				printf("saving %d images\n",j * FRAMEBUFFER_COUNT + buf.index);
 				write(file_fd,frame_buf,frame_len);
 				close(file_fd);
 			}
 #endif
+            if(frame_len != (320 * 240 *2))
+            {
+                printf("len error:%d\n",frame_len);
+                continue;
+            }
+            
+            for(int m = 0;m < 320 * 240 * 2;m += 2)
+            {
+                temp = frame_buf[m];
+                frame_buf[m] = frame_buf[m + 1];
+                frame_buf[m + 1] = temp;
+            }
+ 
+            if(write(fbfd,frame_buf,frame_len))
+            {
+                perror("write error:");
+            }
+            else
+            {
+                printf("write success times = %d\n",j * FRAMEBUFFER_COUNT + buf.index);
+            }
 
-			printf("-------flags = %d\n",buf.flags);
-#if 1
+
+#if 0
 
 			char str_len[10];
 			memset(str_len,0x0,10);
@@ -406,6 +438,10 @@ int push_images(void)
 	
 		}
 	}
+
+    close(fbfd);
+
+    return 0;
 	
 }
 
