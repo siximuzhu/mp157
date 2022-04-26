@@ -12,7 +12,8 @@
 #include <netinet/in.h>
 #include <arpa/inet.h>
  
-#define IPSTR "61.147.124.120"
+//#define IPSTR "124.71.221.251"
+#define IPSTR "172.16.10.189"
 #define PORT 80
 #define BUFSIZE 1024
  
@@ -46,18 +47,19 @@ int main(int argc, char **argv)
  
         //发送数据
         memset(str2, 0, 4096);
-        strcat(str2, "qqCode=474497857");
+        strcat(str2, "{\"username\":\"luozhu\",\"password\":\"12343\"}");
         str=(char *)malloc(128);
         len = strlen(str2);
         sprintf(str, "%d", len);
  
         memset(str1, 0, 4096);
-        strcat(str1, "POST /webservices/qqOnlineWebService.asmx/qqCheckOnline HTTP/1.1\n");
-        strcat(str1, "Host: www.webxml.com.cn\n");
-        strcat(str1, "Content-Type: application/x-www-form-urlencoded\n");
+        strcat(str1, "POST /stream HTTP/1.1\r\n");
+        strcat(str1, "Host: 172.16.10.189:80\r\n");
+        strcat(str1, "Accept: */*\r\n");
+        strcat(str1, "Content-Type: application/json\r\n");
         strcat(str1, "Content-Length: ");
         strcat(str1, str);
-        strcat(str1, "\n\n");
+        strcat(str1, "\r\n\r\n");
  
         strcat(str1, str2);
         strcat(str1, "\r\n\r\n");
@@ -75,15 +77,19 @@ int main(int argc, char **argv)
         FD_SET(sockfd, &t_set1);
  
         while(1){
-                sleep(2);
-                tv.tv_sec= 0;
+                //sleep(2);
+                tv.tv_sec= 20;
                 tv.tv_usec= 0;
                 h= 0;
                 printf("--------------->1");
                 h= select(sockfd +1, &t_set1, NULL, NULL, &tv);
                 printf("--------------->2");
  
-                //if (h == 0) continue;
+                if (h == 0) 
+                {
+                        printf("timeout\n");
+                        continue;
+                }
                 if (h < 0) {
                         close(sockfd);
                         printf("在读取数据报文时SELECT检测到异常，该异常导致线程终止！\n");

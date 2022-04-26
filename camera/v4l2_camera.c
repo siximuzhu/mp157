@@ -24,11 +24,18 @@
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <netdb.h>
+#include "base64.h"
+
+#define  DISPLAY_BY_ILI9341     0
+#define  DISPLAY_BY_FILE        0
+#define  DISPLAY_BY_TCP         0
+#define  DISPLAY_BY_HTTP        1
+      
 
 #define FB_DEV              "/dev/fb0"      //LCD设备节点
 #define FRAMEBUFFER_COUNT   3               //帧缓冲数量
-#define HOST_IP				"192.168.3.2"
-#define TCP_PORT			12345
+#define HOST_IP				"172.16.10.189"
+#define PORT			    80
 
 /*** 摄像头像素格式及其描述信息 ***/
 typedef struct camera_format {
@@ -171,7 +178,7 @@ static int v4l2_set_format(void)
     fmt.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;//type类型
     fmt.fmt.pix.width = width;  //视频帧宽度
     fmt.fmt.pix.height = height;//视频帧高度
-    fmt.fmt.pix.pixelformat = V4L2_PIX_FMT_RGB565; //V4L2_PIX_FMT_RGB565; V4L2_PIX_FMT_JPEG  //像素格式
+    fmt.fmt.pix.pixelformat = V4L2_PIX_FMT_JPEG; //V4L2_PIX_FMT_RGB565; V4L2_PIX_FMT_JPEG  //像素格式
 	if( 0 > ioctl(v4l2_fd,VIDIOC_S_FMT, &fmt)) {
         fprintf(stderr, "ioctl error: VIDIOC_S_FMT: %s\n", strerror(errno));
         return -1;
@@ -179,7 +186,7 @@ static int v4l2_set_format(void)
 
     /*** 判断是否已经设置为我们要求的RGB565像素格式
     如果没有设置成功表示该设备不支持RGB565像素格式 */
-    if (V4L2_PIX_FMT_RGB565 != fmt.fmt.pix.pixelformat) {
+    if (V4L2_PIX_FMT_JPEG != fmt.fmt.pix.pixelformat) {
     //if (V4L2_PIX_FMT_JPEG != fmt.fmt.pix.pixelformat) {
         fprintf(stderr, "Error: the device does not support RGB565 format!\n");
         return -1;
@@ -333,6 +340,128 @@ int socket_connect_server(char *ip,int port)
 	
 }
 
+int http_connect_server()
+{
+    int sockfd;
+    struct sockaddr_in servaddr;
+
+    if ((sockfd = socket(AF_INET, SOCK_STREAM, 0)) < 0 ) {
+            printf("创建网络连接失败,本线程即将终止---socket error!\n");
+            exit(-1);
+    };
+
+    bzero(&servaddr, sizeof(servaddr));
+    servaddr.sin_family = AF_INET;
+    servaddr.sin_port = htons(PORT);
+    if (inet_pton(AF_INET, HOST_IP, &servaddr.sin_addr) <= 0 ){
+            printf("创建网络连接失败,本线程即将终止--inet_pton error!\n");
+            exit(0);
+    };
+
+    if (connect(sockfd, (struct sockaddr *)&servaddr, sizeof(servaddr)) < 0){
+            printf("连接到服务器失败,connect error!\n");
+            exit(0);
+    }
+    printf("与远端建立了连接\n");
+
+    return sockfd;
+}
+
+int http_post_data(int sockfd,char *data,unsigned int len)
+{
+    char *post_data;
+    char str_len[10],read_buf[1024];
+    fd_set   t_set1;
+    struct timeval  tv;
+    int ret;
+
+
+    memset(str_len,0x0,sizeof(str_len));
+    memset(read_buf,0x0,sizeof(read_buf));
+
+    post_data = (char *)malloc(1 * 1024 * 1024);
+    if(!post_data)
+    {
+        printf("post data malloc error\n");
+        return -1;
+    }
+ 
+
+    memset(post_data,0x0, 1 *1024 * 1024);
+
+    strcat(post_data, "POST /stream HTTP/1.1\r\n");
+    strcat(post_data, "Host: 172.16.10.189:80\r\n");
+    strcat(post_data, "Accept: */*\r\n");
+    strcat(post_data, "Content-Type: application/json\r\n");
+    strcat(post_data, "Content-Length: ");
+
+    sprintf(str_len,"%d",len);
+    strcat(post_data, str_len);
+    strcat(post_data, "\r\n\r\n");
+
+    //"{\"username\":\"luozhu\",\"password\":\"12343\"}"
+    memcpy(post_data + strlen(post_data),data,len);
+    strcat(post_data, "\r\n\r\n");
+
+    //printf("%s\n",post_data);
+
+    printf("start write fd = %d,ptr = %p,len = %d\n",sockfd,post_data,strlen(post_data));
+
+    ret = write(sockfd,post_data,strlen(post_data));
+    printf("write over!\n");
+    if (ret < 0) 
+    {
+        printf("发送失败！错误代码是%d，错误信息是'%s'\n",errno, strerror(errno));
+        exit(-1);
+    }
+    else
+    {
+        printf("消息发送成功，共发送了%d个字节！\n\n", ret);
+    }
+
+    FD_ZERO(&t_set1);
+    FD_SET(sockfd, &t_set1);
+
+    while(1)
+    {
+        tv.tv_sec= 20;
+        tv.tv_usec= 0;
+      
+        ret = select(sockfd +1, &t_set1, NULL, NULL, &tv);
+
+        if (ret == 0) 
+        {
+            printf("timeout\n");
+            continue;
+        }
+        if (ret < 0) {
+            close(sockfd);
+            printf("在读取数据报文时SELECT检测到异常，该异常导致线程终止！\n");
+            free(post_data);
+            return -2;
+        };
+
+        if (ret > 0){
+            //ret = read(sockfd, read_buf, 1024);
+            ret = recv(sockfd,read_buf, 1024,0);
+            if (ret == 0)
+            {
+                close(sockfd);
+                printf("读取数据报文时发现远端关闭，该线程终止！\n");
+                free(post_data);
+                return -3;
+            }
+
+            printf("ret = %d ,%s\n", ret,read_buf);
+            break;
+        }       
+    }
+
+    free(post_data);
+    return 0;
+}
+
+char http_data[3 * 1024 *1024];
 char frame_buf[3 * 1024 * 1024];
 unsigned int frame_len = 0;
 int push_images(void)
@@ -342,14 +471,15 @@ int push_images(void)
 	char recv_data[10];
     char temp;
 
-#if 0
-	int sockfd = socket_connect_server(HOST_IP,TCP_PORT);
+#if DISPLAY_BY_TCP
+	int sockfd = socket_connect_server(HOST_IP,PORT);
 	if(sockfd < 0)
 	{
 		return -1;
 	}	
 #endif
 
+#if DISPLAY_BY_ILI9341
     int fbfd = open("/dev/ili9341",O_RDWR);
     if(fbfd < 0)
     {
@@ -358,12 +488,16 @@ int push_images(void)
     }else{
         printf("open /dev/ili9341 success\n");
     }
+#endif
 
+#if DISPLAY_BY_HTTP
+    int sockfd =  http_connect_server();
 
+#endif
 
     buf.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
     buf.memory = V4L2_MEMORY_MMAP;
-	for(int j = 0;;j++)
+	for(int j = 0;j < 100;j++)
 	{
 		
 		for(buf.index = 0; buf.index < FRAMEBUFFER_COUNT; buf.index++)
@@ -376,7 +510,8 @@ int push_images(void)
 			}
 			frame_len = buf.bytesused;
 			memcpy(frame_buf,buf_infos[buf.index].start,frame_len);
-#if 0
+
+#if DISPLAY_BY_FILE
 			sprintf(buffer,"/workspace/%d.jpg",j * FRAMEBUFFER_COUNT + buf.index);
 			int file_fd = open(buffer,O_RDWR | O_CREAT); // 若打开失败则不存储该帧图像
 			if(file_fd > 0){
@@ -385,6 +520,8 @@ int push_images(void)
 				close(file_fd);
 			}
 #endif
+
+#if DISPLAY_BY_ILI9341
             if(frame_len != (320 * 240 *2))
             {
                 printf("len error:%d\n",frame_len);
@@ -406,9 +543,9 @@ int push_images(void)
             {
                 printf("write success times = %d\n",j * FRAMEBUFFER_COUNT + buf.index);
             }
+#endif 
 
-
-#if 0
+#if DISPLAY_BY_TCP
 
 			char str_len[10];
 			memset(str_len,0x0,10);
@@ -428,6 +565,24 @@ int push_images(void)
 			printf("recv2:%s\n",recv_data);
 			usleep(200 * 1000);
 #endif
+
+#if DISPLAY_BY_HTTP
+            char *image_base64;
+            size_t out_len;
+
+            printf("start base64\n");
+            image_base64 = base64_encode(frame_buf,frame_len,&out_len);
+            sprintf(http_data,"{\"image_len\":%d,\"image_data\":\"%s\"}",out_len,image_base64);
+            
+            printf("start post\n");
+            http_post_data(sockfd,http_data,strlen(http_data));
+            printf("end post\n");
+            free(image_base64);
+
+
+#endif
+
+
 #if 1
 			if(ioctl(v4l2_fd, VIDIOC_QBUF, &buf) < 0)
 			{
@@ -438,8 +593,9 @@ int push_images(void)
 	
 		}
 	}
-
+#if DISPLAY_BY_ILI9341
     close(fbfd);
+#endif
 
     return 0;
 	
@@ -452,7 +608,7 @@ int main(int argc, char *argv[])
         fprintf(stderr, "Usage: %s <video_dev>\n", argv[0]);
         exit(EXIT_FAILURE);
     }
-
+#if 1
     /* 初始化LCD */
 //    if (fb_dev_init())
 //        exit(EXIT_FAILURE);
@@ -480,6 +636,20 @@ int main(int argc, char *argv[])
     /* 读取数据：出队 */
     //v4l2_read_data();       //在函数内循环采集数据、将其显示到LCD屏
 	push_images();
+#else
+
+    char *base64_data;
+    size_t out_len;
+    char *data = "{\"username\":\"luozhu\",\"password\":\"12343\"}";
+
+    base64_data = base64_encode(data,strlen(data),&out_len);
+
+
+    int sockfd =  http_connect_server();
+    http_post_data(sockfd,base64_data,strlen(base64_data));
+
+    free(base64_data);
+#endif
 
     exit(EXIT_SUCCESS);
 }
